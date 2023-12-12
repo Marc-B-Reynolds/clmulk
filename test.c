@@ -29,6 +29,8 @@ void weyl_frag(frag_func_t* f)
     
     k += weyl_add_u64;
 
+    if ((i & 0xff)==0) { printf("."); fflush(stdout); }
+    
     uint64_t k0 = k ;//& 0xffff;
 
     f(&frag, k0);
@@ -46,6 +48,8 @@ void simple_frag(frag_func_t* f)
 {
   uint32_t e = 0;
 
+  printf("foo\n");
+  
   clmulk_vm_t   vm;
   clmulk_frag_t frag = {.op = (clmulk_op_t*)&vm.op};
   
@@ -63,12 +67,13 @@ void simple_frag(frag_func_t* f)
       printf("**********bailing : i=%u e=%u\n",i,e); return;
     }
   }
+  printf("done\n");
 }
 
 
 int main(void)
 {
-  weyl_frag(&clmulk_g2br1_new);
   simple_frag(&clmulk_g2br1_new);
+  weyl_frag(&clmulk_g2br1_new);
   return 0;
 }
