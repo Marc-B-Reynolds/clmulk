@@ -3,19 +3,16 @@
 
 
 #include <stdint.h>
-//#include <smmintrin.h>
-// 
-#if defined(_MSC_VER)
-#include <wmmintrin.h>
-#else
-#include <x86intrin.h>
-#endif
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdbool.h>
+//#include <stdlib.h>
+//#include <string.h>
+//#include <stdbool.h>
 #include <assert.h>
+
+#if defined(__GNUC__) && !defined(__clang__)
+static_assert(0, "problem under GCC atm. infinite loop. opps!");
+#endif
 
 /************************************************
 
@@ -34,14 +31,42 @@
 //   estimate. this is ad-hoc based on my current thinking
 //   of the "space" that's explored.
 
-#define CARRYLESS_IMPLEMENTATION
-#define INTOPS_IMPLEMENTATION
-
-#include "carryless.h"
-#include "intops.h"
-#include "bitops.h"
-
 #include "clmulk.h"
+
+
+//*************************************************************
+
+static inline uint64_t clmulk_pop_next(uint64_t x)
+{
+  uint64_t t = x + (x & -x);
+  x = x & ~t;
+  x = (uint64_t)((int64_t)x >> clmulk_ctz(x));
+  x = (uint64_t)((int64_t)x >> 1);
+
+  return t^x;
+}
+
+clmulk_pair_t clmulk_divrem(uint64_t a, uint64_t b)
+{
+  uint64_t q  = 0;
+
+  // nuke compare. illegal. add assert
+  
+  if (b != 0) {
+    uint64_t lb = clmulk_clz(b);
+    uint64_t t  = lb - clmulk_clz(a);
+    
+    while ((int64_t)t >= 0) {
+      a ^= b << t;
+      q ^= UINT64_C(1) << t;
+      t  = lb - clmulk_clz(a);
+    }
+  }
+    
+  return (clmulk_pair_t){.q=q, .r=a};
+}
+
+//*************************************************************
 
 
 // just for print_c: usually we know it...but don't care atm
@@ -106,7 +131,7 @@ void dump_line_64(char* prefix, uint64_t x)
 {
   printf("%s 0x%016lx : ", prefix, x);
   printb(x,64);
-  printf(" %2u ", pop_64(x));
+  printf(" %2u ", clmulk_pop(x));
 }
 
 //*************************************************************
@@ -197,7 +222,7 @@ uint64_t clmulk_vm_sanity(clmulk_vm_t* vm)
 static inline void clmulk_mul_assert(uint64_t k, uint32_t pop)
 {
   if (k & 1) {
-    uint32_t p = pop_64(k);
+    uint32_t p = clmulk_pop(k);
     if (p == pop)
       return;
     else {
@@ -209,130 +234,6 @@ static inline void clmulk_mul_assert(uint64_t k, uint32_t pop)
 }
 
 
-static inline void clmulk_emit_return(clmulk_frag_t* f, uint32_t s)
-{
-  clmulk_op_t* op = f->op;
-  uint32_t     rn = f->rn;
-
-  op[rn] = CLMULK_SHIFT_RET(s);
-
-  //f->cost += (s != 0);
-}
-
-
-// multiply rx by (1 + 2^a)
-static inline void clmulk_emit_mul2_i(clmulk_frag_t* f, uint32_t rx, uint32_t a)
-{
-  clmulk_op_t* op = f->op;
-  uint32_t     rn = f->rn;
-
-  op[rn]   = CLMULK_MUL(rx, rx, a); rn++;
-  //f->cost += 1;
-  
-  f->rn = (uint8_t)rn;
-}
-
-// multiply rn by (1 + 2^a)
-static inline void clmulk_rn_mul2_i(clmulk_frag_t* f, uint32_t a)
-{
-  clmulk_emit_mul2_i(f, f->rn, a);
-}
-
-
-// multiply rx by odd k with pop(k)=2
-static inline void clmulk_emit_mul2(clmulk_frag_t* f, uint32_t rx, uint64_t k)
-{
-  clmulk_mul_assert(k,2);
-
-  uint64_t n = k;         n = n ^ 1;
-  uint32_t a = ctz_64(n); n = n & (n-1);
-
-  clmulk_emit_mul2_i(f,rx,a);
-}
-
-
-// multiply rx by (1 + 2^a + 2^b)
-void clmulk_emit_mul3_i(clmulk_frag_t* f, uint32_t rx, uint32_t a, uint32_t b)
-{
-  clmulk_op_t* op = f->op;
-  uint32_t     rn = f->rn;
-
-  op[rn]   = CLMULK_MUL(rx, rx, a); rn++;
-  op[rn]   = CLMULK_MUL(rn, rx, b); rn++;
-  //f->cost += 2;
-  
-  f->rn = (uint8_t)rn;
-}
-
-// multiply rx by odd k with pop(k)=3
-static inline void clmulk_emit_mul3(clmulk_frag_t* f, uint32_t rx, uint64_t k)
-{
-  clmulk_mul_assert(k,3);
-
-  uint64_t n = k;         n = n ^ 1;
-  uint32_t a = ctz_64(n); n = n & (n-1);
-  uint32_t b = ctz_64(n); n = n & (n-1);
-
-  clmulk_emit_mul3_i(f,rx,a,b);
-}
-
-
-
-// NOPE
-void clmulk_emit_mul4_i(clmulk_frag_t* f, uint32_t rx, uint32_t a, uint32_t b, uint32_t c)
-{
-  clmulk_op_t* op = f->op;
-  uint32_t     rn = f->rn;
-
-  // can we factor into (1+2^a)(1+2^b)?
-  if (c != a+b) {
-    op[rn]   = CLMULK_MUL(rn,rx,a); rn++;
-    op[rn]   = CLMULK_MUL(rn,rx,b); rn++;
-    op[rn]   = CLMULK_MUL(rn,rx,c); rn++;
-    //f->cost += 3;
-  }
-  else {
-    op[rn]   = CLMULK_MUL(rn,rx,a); rn++;
-    op[rn]   = CLMULK_MUL(rn,rn,b); rn++;
-    //f->cost += 2;
-  }
-  
-  f->rn = (uint8_t)rn;
-}
-
-// helper function: directly generates 'k' which
-// is odd and has exactly 4 bits set into either
-// a 2 or 3 op sequence.
-void clmulk_emit_mul4(clmulk_frag_t* f, uint32_t rx, uint64_t k)
-{
-  uint64_t n;
-  uint32_t a,b,c;
-
-  clmulk_mul_assert(k,4);
-
-  // k = 1 + 2^a + 2^b + 2^c (a <= b <= c)
-  n = k;         n = n ^ 1;
-  a = ctz_64(n); n = n & (n-1);
-  b = ctz_64(n); n = n & (n-1);
-  c = ctz_64(n); n = n & (n-1);
-
-  clmulk_emit_mul4_i(f,rx,a,b,c);  
-}
-
-static inline void clmulk_rn_mul2(clmulk_frag_t* f, uint64_t k)
-{
-  clmulk_emit_mul2(f,f->rn,k);
-}
-
-static inline void clmulk_rn_mul3(clmulk_frag_t* f, uint64_t k)
-{
-  clmulk_emit_mul3(f,f->rn,k);
-}
-
-static inline void clmulk_rn_mul4(clmulk_frag_t* f, uint64_t k)
-{
-  clmulk_emit_mul4(f,f->rn,k);
-}
 
 //************************************************
 
@@ -351,13 +252,13 @@ void clmulk_vm_schoolbook(clmulk_vm_t* vm, uint64_t k)
     
     // make odd and kill the low one.
     // the first op handles the two lowest bits
-    s   = ctz_64(k);
+    s   = clmulk_ctz(k);
     k >>= s;
     k   = k & (k-1);
     
     // for the rest add one at a time
     while(k) {
-      bit       = ctz_64(k);
+      bit       = clmulk_ctz(k);
       k         = k & (k-1);
       vm->op[i] = CLMULK_MUL(i,0,bit);
       i++;
@@ -376,16 +277,16 @@ void clmulk_vm_schoolbook(clmulk_vm_t* vm, uint64_t k)
 
 
 
-pair_u64_t clmul_find_2(uint64_t k)
+clmulk_pair_t clmul_find_2(uint64_t k)
 {
-  pair_u64_t divrem;
+  clmulk_pair_t divrem;
   
-  uint32_t bit = (uint32_t)log2_ceil_u64(k);
+  uint32_t bit = clmulk_log2_ceil(k);
 
   while(bit != 0) {
     uint64_t d = (UINT64_C(1)<<bit) ^ 1;
 
-    divrem = cl_divrem_64(k,d);
+    divrem = clmulk_divrem(k,d);
 
     if (divrem.r == 0) {
       return divrem;
@@ -394,7 +295,7 @@ pair_u64_t clmul_find_2(uint64_t k)
     bit--;
   }
 
-  return cl_divrem_64(k,3);
+  return clmulk_divrem(k,3);
 }
 
 #if 0
@@ -405,23 +306,128 @@ uint64_t clmul_find_3(uint64_t k)
 
 
 //************************************************
-// greedy 2-bit/remainder-1 method
+// goofying around. these are tots inconsistent.
 
-
-static const uint32_t clmulk_tail_max = 4;
-
-#if 0
-static inline void
-clmulk_small_tail(clmulk_frag_t* f, uint64_t k, uint32_t pop, uint32_t rn)
+static inline void clmulk_emit_return(clmulk_frag_t* f, uint32_t s)
 {
+  clmulk_op_t* op = f->op;
+  uint32_t     rn = f->rn;
+
+  op[rn] = CLMULK_SHIFT_RET(s);
+}
+
+
+static inline uint32_t clmulk_mul2(clmulk_frag_t* f, uint32_t rn, uint32_t a)
+{
+  f->op[rn] = CLMULK_MUL(rn,rn,a); rn++;
+  return rn;
+}
+
+static inline uint32_t clmulk_add1(clmulk_frag_t* f, uint32_t rn, uint32_t a)
+{
+  f->op[rn] = CLMULK_MUL(0,rn,a); rn++;
+  return rn;
+}
+
+static inline uint32_t
+clmulk_rx_mul3(clmulk_frag_t* f, uint32_t rx, uint32_t rn, uint32_t a, uint32_t b)
+{
+  clmulk_op_t* op = f->op;
+
+  op[rn] = CLMULK_MUL(rx, rx, a); rn++;
+  op[rn] = CLMULK_MUL(rn, rx, b); rn++;
+  
+  return rn;
+}
+
+static inline uint32_t
+clmulk_rx_mul4(clmulk_frag_t* f, uint32_t rn, uint32_t rx, uint32_t a, uint32_t b, uint32_t c)
+{
+  clmulk_op_t* op = f->op;
+
+  // can we factor into (1+2^a)(1+2^b)?
+  if (c != a+b) {
+    op[rn] = CLMULK_MUL(rn,rx,a); rn++;
+    op[rn] = CLMULK_MUL(rn,rx,b); rn++;
+    op[rn] = CLMULK_MUL(rn,rx,c); rn++;
+  }
+  else {
+    op[rn] = CLMULK_MUL(rn,rx,a); rn++;
+    op[rn] = CLMULK_MUL(rn,rn,b); rn++;
+  }
+  
+  return rn;
+}
+
+static inline uint32_t
+clmulk_mul3(clmulk_frag_t* f, uint32_t rn, uint32_t a, uint32_t b)
+{
+  return clmulk_rx_mul3(f,rn,rn,a,b);
+}
+
+static inline uint32_t
+clmulk_mul4(clmulk_frag_t* f, uint32_t rn, uint32_t a, uint32_t b, uint32_t c)
+{
+  return clmulk_rx_mul4(f,rn,rn,a,b,c);
+}
+
+static inline uint32_t
+clmulk_emit_mul2(clmulk_frag_t* f, uint32_t rn, uint64_t k)
+{
+  uint64_t n = k;             n = n ^ 1;
+  uint32_t a = clmulk_ctz(n); n = n & (n-1);
+
+  return clmulk_mul2(f,rn,a);
+}
+
+static inline uint32_t
+clmulk_emit_mul3(clmulk_frag_t* f, uint32_t rn, uint64_t k)
+{
+  uint64_t n = k;             n = n ^ 1;
+  uint32_t a = clmulk_ctz(n); n = n & (n-1);
+  uint32_t b = clmulk_ctz(n); n = n & (n-1);
+
+  return clmulk_mul3(f,rn,a,b);
+}
+
+static inline uint32_t
+clmulk_emit_mul4(clmulk_frag_t* f, uint32_t rn, uint64_t k)
+{
+  uint64_t n;
+  uint32_t a,b,c;
+
+  // k = 1 + 2^a + 2^b + 2^c (a <= b <= c)
+  n = k;             n = n ^ 1;
+  a = clmulk_ctz(n); n = n & (n-1);
+  b = clmulk_ctz(n); n = n & (n-1);
+  c = clmulk_ctz(n); n = n & (n-1);
+
+  return clmulk_mul4(f,rn,a,b,c);  
+}
+
+
+const uint32_t clmulk_tail_max = 4;
+
+static inline uint32_t
+clmulk_tail(clmulk_frag_t* f, uint64_t k, uint32_t rn)
+{
+  // allow compiler to remove. caller has this.
+  uint32_t pop = clmulk_pop(k);
+
+  //printf("%u",pop);
+  
   switch(pop) {
-    case 4: rn = clmulk_rn_mul4(f, k); break;
-    case 3: rn = clmulk_rn_mul3(f, k); break;
-    case 2: rn = clmulk_rn_mul2(f, k); break;
+    case 4: rn = clmulk_emit_mul4(f, rn, k); break;
+    case 3: rn = clmulk_emit_mul3(f, rn, k); break;
+    case 2: rn = clmulk_emit_mul2(f, rn, k); break;
   }
   return rn;
 }
-#endif
+
+
+static void foo(void)
+{
+}
 
 
 //************************************************
@@ -429,58 +435,125 @@ clmulk_small_tail(clmulk_frag_t* f, uint64_t k, uint32_t pop, uint32_t rn)
 
 uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
-  // temp hack
-  if (k > 1) {
-    uint32_t pop = pop_64(k);
+  uint32_t pop = clmulk_pop(k);
+  
+  if (pop > clmulk_tail_max) {
     uint32_t s   = 0;
     
     if (pop & 1) {
       k  ^= 1;
-      s   = ctz_64(k);
+      s   = clmulk_ctz(k);
       k >>= s;
     }
     
     // here: k is even so divisible by some 2-bit number
     // this is "naive" version. change to determine small
     // divisor and find any multiple
-    pair_u64_t divrem;
-    uint32_t   pos = (uint32_t)log2_ceil_u64(k);
+    clmulk_pair_t divrem;
+    uint32_t   pos = clmulk_log2_ceil(k);
     
     // make a find 2-bit function?
+    // - return q & pos
+    // - but a try would go in the center...but that's
+    //   a different function.
     do {
-      divrem = cl_divrem_64(k, (1ul<<pos)^1);
+      divrem = clmulk_divrem(k, (1ul<<pos)^1);
       if (divrem.r == 0) break;
       pos--;
     } while(pos != 0);
+
+    rn = clmulk_g2br1_i(f, divrem.q, rn);
+    rn = clmulk_mul2(f, rn, pos);
     
-    if (s == 0) {
-      rn        = clmulk_g2br1_i(f, divrem.q, rn);
-      f->op[rn] = CLMULK_MUL(rn, rn, pos); rn++;
-    }
-    else {
-      rn        = clmulk_g2br1_i(f, divrem.q, rn);
-      f->op[rn] = CLMULK_MUL(rn, rn, pos); rn++;
-      f->op[rn] = CLMULK_MUL(0,  rn, s);   rn++;
-    }
+    if (s != 0)
+      rn = clmulk_add1(f,rn,s);
+
+    return rn;
   }
+
+  return clmulk_tail(f,k,rn);
+}
+
+// temp wrapper
+void clmulk_g2br1_new(clmulk_frag_t* f, uint64_t k)
+{
+  uint32_t s  = clmulk_ctz(k);
+  uint32_t rn = clmulk_g2br1_i(f,k>>s,0);
+  
+  f->op[rn] = CLMULK_SHIFT_RET(s);
+}
+
+//************************************************
+
+uint32_t clmulk_g23b_i(clmulk_frag_t* f, uint64_t k, uint32_t rn);
+
+
+uint32_t clmulk_g23b_o(clmulk_frag_t* f, uint64_t k, uint32_t rn)
+{
+  clmulk_pair_t divrem;
+
+  uint32_t s = 0;
+  
+  k  ^= 1;
+  s   = clmulk_ctz(k);
+  k >>= s;
+  
+  uint32_t pos = clmulk_log2_ceil(k);
+  
+  do {
+    divrem = clmulk_divrem(k, (1ul<<pos)^1);
+    if (divrem.r == 0) break;
+    pos--;
+  } while(pos != 0);
+  
+  rn = clmulk_g23b_i(f, divrem.q, rn);
+  rn = clmulk_mul2(f, rn, pos);
+  rn = clmulk_add1(f,rn,s);
+  
+  return rn;
+}
+
+uint32_t clmulk_g23b_e(clmulk_frag_t* f, uint64_t k, uint32_t rn)
+{
+  uint32_t pos = clmulk_log2_ceil(k);
+  
+  clmulk_pair_t divrem;
+  
+  do {
+    divrem = clmulk_divrem(k, (1ul<<pos)^1);
+    if (divrem.r == 0) break;
+    pos--;
+  } while(pos != 0);
+  
+  rn = clmulk_g23b_i(f, divrem.q, rn);
+  rn = clmulk_mul2(f, rn, pos);
 
   return rn;
 }
 
-
-void clmulk_g2br1_new(clmulk_frag_t* f, uint64_t k)
+uint32_t clmulk_g23b_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
-  uint32_t s  = ctz_64(k);
+  if (k > 1) {
+    uint32_t pop = clmulk_pop(k);
 
-  //f->cost += (s != 0);
+    if (pop & 1)
+      return clmulk_g23b_o(f,k,rn);
+
+    return clmulk_g23b_e(f,k,rn);
+  }
   
-  uint32_t rn = clmulk_g2br1_i(f,k>>s,0);
-
-  f->op[rn] = CLMULK_SHIFT_RET(s);
+  return rn;
 }
 
-
-
-//************************************************
 //************************************************
 
+#if 0
+static inline uint32_t clmulk_build_try(uint32_t rn)
+{
+  uint32_t r0 = f(build, rn, k);
+  
+  
+  
+  return rn;
+}
+#endif
