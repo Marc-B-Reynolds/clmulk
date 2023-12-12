@@ -3,6 +3,32 @@
 #define CLMULK_H
 
 //************************************************
+//
+
+#if !defined(__x86_64__) && !defined(_MSC_VER)
+static inline uint32_t clmulk_ctz(uint64_t x) { return (x!=0) ? (uint32_t)__builtin_ctzl(x) : 64; }
+static inline uint32_t clmulk_pop(uint64_t x) { return (uint32_t)__builtin_popcountl(x); }
+
+#else
+
+#if defined(_MSC_VER)
+#include <wmmintrin.h>
+#else
+#include <x86intrin.h>
+#endif
+
+static inline uint32_t clmulk_ctz(uint64_t x) { return (uint32_t)_tzcnt_u64(x); }
+static inline uint32_t clmulk_clz(uint64_t x) { return (uint32_t)__lzcnt64(x);  }
+static inline uint32_t clmulk_pop(uint64_t x) { return (uint32_t)_mm_popcnt_u64(x); }
+#endif
+
+static inline uint32_t clmulk_log2(uint64_t x)      { return (63-clmulk_clz(x  )); }
+static inline uint32_t clmulk_log2_ceil(uint64_t x) { return (64-clmulk_clz(x-1)); }
+
+typedef struct { uint64_t q, r;} clmulk_pair_t; 
+
+
+//************************************************
 // tiny register machine 
 //
 // * only two operations:
