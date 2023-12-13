@@ -47,12 +47,12 @@ typedef struct {
 // enough space for schoolbook (even that can do
 // better than this if encode via (~k + ~0)
 // support is added for large popcount)
-#define CLMULK_VM_MAXOPS 65
+#define CLMULK_MAXOPS 65
 
 // quick wrapper
 typedef struct {
   uint64_t    k;
-  clmulk_op_t op[CLMULK_VM_MAXOPS];
+  clmulk_op_t op[CLMULK_MAXOPS];
 } clmulk_vm_t;
 
 
@@ -66,14 +66,9 @@ typedef struct {
 
 // 
 typedef struct {
-  uint8_t rx;  // kill? only in hacky test ATM. belongs on logical stack anyway
-//uint8_t r0;  // kill? ditto
-
+  // change to uint32_t? probably
   uint8_t rn;
-//uint8_t shift;
-//uint8_t cost;
   uint8_t limit;
-  
   clmulk_op_t* op;
 } clmulk_frag_t;
 
@@ -97,12 +92,13 @@ typedef struct {
   uint64_t      k;
 
   // not really..humm...
-  clmulk_op_t   op1[CLMULK_VM_MAXOPS];
-  clmulk_op_t   op2[CLMULK_VM_MAXOPS];
+  clmulk_op_t   op1[CLMULK_MAXOPS];
+  clmulk_op_t   op2[CLMULK_MAXOPS];
 } clmulk_builder_t;
 
+extern void clmulk_print_c(uint64_t k, clmulk_op_t* op);
 
-extern void     clmulk_g2br1(clmulk_frag_t* f, uint64_t k);
+extern uint32_t clmulk_g2br1(clmulk_frag_t* f, uint64_t k);
 
 extern uint64_t clmulk_sanity(clmulk_op_t* op, const uint64_t k);
 

@@ -16,6 +16,11 @@ static_assert(0, "problem under GCC atm. infinite loop. opps!");
 
 /************************************************
 
+  All of this is a major mess & eyesore. I'm hacking
+  in small bursts. XXX
+
+  -----------------------------------------------
+
   s-significant bit number:
   * even parity has (at least one) factor of 3
     more generally there's some 2-bit number that is
@@ -26,10 +31,24 @@ static_assert(0, "problem under GCC atm. infinite loop. opps!");
 
  ************************************************/
 
-// * initial cost limit should be pop(k)-1 & not pop(k)
+// * initial cost limit should be pop(k)-1. can be
+//   tighter than that in high pop vs. num of sig bits
+//   cases.
 // * check on: ceil(log2(transition_count)) as low bound
 //   estimate. this is ad-hoc based on my current thinking
 //   of the "space" that's explored.
+// * put asserts back in and add tracing
+// * memorization:
+//   * internal: look-up sub-expression during building.
+//     Don't think it's useful outside of empirical
+//     testing.
+//   * root: keeping a small LRU could be useful for
+//     a compiler.
+// * cost modeling. currently there is none as I'm only
+//   producing one dep-chain. So it's almost the number
+//   of vm-ops produced (the exception being if the
+//   return op is shifted or not). This would need to
+//   change if I think of a useful additive factoring.
 
 #include "clmulk.h"
 
@@ -85,7 +104,7 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
   
   printf("uint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n\n  r[ 0] = x;\n", k,len+1);
 
-  for(uint32_t i=0; i<CLMULK_VM_MAXOPS; i++) {
+  for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
     switch(op[i].op) {
     case 1:
       printf("  r[%2u] = r[%2u] ^ ", i+1, op[i].a);
@@ -110,6 +129,48 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 
   // error to reach here
 }
+
+// doesn't general work ATM. for internal hacking
+#if 1
+void clmulk_print_rn_c(uint64_t k, clmulk_op_t* op)
+{
+  uint32_t len = clmulk_len(op);
+  
+  printf("uint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n  uint32_t rn = 0;\n\n  r[ 0] = x;\n", k,len+1);
+
+  for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
+    switch(op[i].op) {
+
+    case 1:
+
+      if ((op[i].a != 0) && (i != 0)) 
+	printf("  r[rn+1] = r[rn] ^ ");
+      else
+	printf("  r[rn+1] = r[ 0] ^ ");
+
+      if (op[i].s != 0)
+	printf("(r[rn] << %2u); rn++;\n", op[i].s);
+      else
+	printf("r[rn]; rn++;\n");
+
+      break;
+
+    case 0:
+      if (op[i].s == 0)
+	printf("\n  return r[rn];\n}\n");
+      else
+	printf("\n  return r[rn] << %u;\n}\n", op[i].s);
+      return;
+ 
+    default:
+      printf("error: add stuff here\n"); return;
+      // error to reach here
+    }
+  }
+
+  // error to reach here
+}
+#endif
 
 void clmulk_vm_print_c(clmulk_vm_t* vm)
 {
@@ -138,11 +199,11 @@ void dump_line_64(char* prefix, uint64_t x)
 
 uint64_t clmulk_eval(clmulk_op_t* op, uint64_t x)
 {
-  uint64_t reg[CLMULK_VM_MAXOPS];
+  uint64_t reg[CLMULK_MAXOPS];
 
   reg[0] = x;
 
-  for(uint32_t i=0; i<CLMULK_VM_MAXOPS; i++) {
+  for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
     switch(op[i].op) {
       case 1:
 	reg[i+1] = reg[op[i].a] ^ (reg[op[i].b] << op[i].s);
@@ -411,11 +472,9 @@ const uint32_t clmulk_tail_max = 4;
 static inline uint32_t
 clmulk_tail(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
-  // allow compiler to remove. caller has this.
+  // caller has this. compiler should be removing
   uint32_t pop = clmulk_pop(k);
 
-  //printf("%u",pop);
-  
   switch(pop) {
     case 4: rn = clmulk_emit_mul4(f, rn, k); break;
     case 3: rn = clmulk_emit_mul3(f, rn, k); break;
@@ -432,6 +491,7 @@ static void foo(void)
 
 //************************************************
 // greedy 2-bit/remainder-1 method
+
 
 uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
@@ -475,12 +535,14 @@ uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 }
 
 // temp wrapper
-void clmulk_g2br1_new(clmulk_frag_t* f, uint64_t k)
+uint32_t clmulk_g2br1(clmulk_frag_t* f, uint64_t k)
 {
   uint32_t s  = clmulk_ctz(k);
   uint32_t rn = clmulk_g2br1_i(f,k>>s,0);
   
   f->op[rn] = CLMULK_SHIFT_RET(s);
+
+  return rn;
 }
 
 //************************************************
