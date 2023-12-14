@@ -31,9 +31,11 @@ static_assert(0, "problem under GCC atm. infinite loop. opps!");
 
  ************************************************/
 
+// * recursive structure is intended as a dev hack
+//   can be converted to non-recursive.
 // * initial cost limit should be pop(k)-1. can be
 //   tighter than that in high pop vs. num of sig bits
-//   cases.
+//   cases (low transition count).
 // * check on: ceil(log2(transition_count)) as low bound
 //   estimate. this is ad-hoc based on my current thinking
 //   of the "space" that's explored.
@@ -65,6 +67,32 @@ static inline uint64_t clmulk_pop_next(uint64_t x)
   return t^x;
 }
 
+static inline uint64_t clmulk_pop_prev(uint64_t x)
+{
+  uint64_t a = ~x & (x+1); 
+  uint64_t b =  x - a;
+  uint64_t c = ~x & b;
+  uint64_t d = (uint64_t)((int64_t)c >> clmulk_ctz(c));
+  d = (uint64_t)((int64_t)c >> 1);
+
+  return b^d;
+}
+
+static inline uint64_t clmulk_pop_next_odd(uint64_t x)
+{
+  x = clmulk_pop_next((uint64_t)((int64_t)x >> 1));
+  x = (x<<1) ^ 1;
+  return x;
+}
+
+static inline uint64_t clmulk_pop_prev_odd(uint64_t x)
+{
+  x = clmulk_pop_prev((uint64_t)((int64_t)x >> 1));
+  x = (x<<1) ^ 1;
+  return x;
+}
+
+
 clmulk_pair_t clmulk_divrem(uint64_t a, uint64_t b)
 {
   uint64_t q  = 0;
@@ -87,6 +115,22 @@ clmulk_pair_t clmulk_divrem(uint64_t a, uint64_t b)
 
 //*************************************************************
 
+// dumb but don't care
+void printb(uint64_t v, uint32_t b)
+{
+  uint64_t m = UINT64_C(1)<<(b-1);
+  do { printf("%c", (v & m)!=0 ? '1':'.'); m >>= 1; } while (m != 0);
+}
+
+void lf(void) { printf("\n"); }
+
+void dump_line_64(char* prefix, uint64_t x)
+{
+  printf("%s 0x%016lx : ", prefix, x);
+  printb(x,64);
+  printf(" %2u ", clmulk_pop(x));
+}
+
 
 // just for print_c: usually we know it...but don't care atm
 uint32_t clmulk_len(clmulk_op_t* op)
@@ -101,8 +145,9 @@ uint32_t clmulk_len(clmulk_op_t* op)
 void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 {
   uint32_t len = clmulk_len(op);
-  
-  printf("uint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n\n  r[ 0] = x;\n", k,len+1);
+
+  dump_line_64("//", k);
+  printf("\nuint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n\n  r[ 0] = x;\n", k,len+1);
 
   for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
     switch(op[i].op) {
@@ -135,7 +180,7 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 void clmulk_print_rn_c(uint64_t k, clmulk_op_t* op)
 {
   uint32_t len = clmulk_len(op);
-  
+
   printf("uint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n  uint32_t rn = 0;\n\n  r[ 0] = x;\n", k,len+1);
 
   for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
@@ -177,23 +222,6 @@ void clmulk_vm_print_c(clmulk_vm_t* vm)
   clmulk_print_c(vm->k, vm->op);
 }
 
-//*************************************************************
-
-// dumb but don't care
-void printb(uint64_t v, uint32_t b)
-{
-  uint64_t m = UINT64_C(1)<<(b-1);
-  do { printf("%c", (v & m)!=0 ? '1':'.'); m >>= 1; } while (m != 0);
-}
-
-void lf(void) { printf("\n"); }
-
-void dump_line_64(char* prefix, uint64_t x)
-{
-  printf("%s 0x%016lx : ", prefix, x);
-  printb(x,64);
-  printf(" %2u ", clmulk_pop(x));
-}
 
 //*************************************************************
 
@@ -338,7 +366,7 @@ void clmulk_vm_schoolbook(clmulk_vm_t* vm, uint64_t k)
 
 
 
-clmulk_pair_t clmul_find_2(uint64_t k)
+clmulk_pair_t clmulk_find_2(uint64_t k)
 {
   clmulk_pair_t divrem;
   
@@ -359,12 +387,101 @@ clmulk_pair_t clmul_find_2(uint64_t k)
   return clmulk_divrem(k,3);
 }
 
+// expensive. for experimenting
 #if 0
-uint64_t clmul_find_3(uint64_t k)
+clmulk_pair_t clmulk_find_3(uint64_t k)
 {
-}
-#endif
+  clmulk_pair_t divrem;
 
+  uint64_t d = 0x7;
+  uint64_t e = k >> 2;
+
+  while(d <= e) {
+    divrem = clmulk_divrem(k,d);
+
+    if (divrem.r == 0) {
+
+#if 1
+      dump_line_64("k", k);        lf();
+      dump_line_64("d", d);        lf();
+      dump_line_64("q", divrem.q); lf();
+#endif      
+
+      divrem.r = d;
+
+      return divrem;
+    }
+    
+    d = clmulk_pop_next_odd(d);
+    
+    if (clmulk_pop(d) != 3) {printf("what?\n");}
+  }
+
+  divrem.r = 0;
+
+  return divrem;
+}
+#elif 0
+clmulk_pair_t clmulk_find_3(uint64_t k)
+{
+  clmulk_pair_t divrem;
+
+  uint64_t d = (UINT64_C(3)<<62) >> clmulk_clz(k);
+  
+  d = (d>>2)|1;
+
+#if 0
+  dump_line_64("k  ", k);  lf();
+  dump_line_64("div", d);  lf();
+#endif  
+
+  while(d != 0) {
+    if (divrem.r == 0) {
+      
+#if 1
+      dump_line_64("k", k);        lf();
+      dump_line_64("d", d);        lf();
+      dump_line_64("q", divrem.q); lf();
+#endif      
+      
+      divrem.r = d;
+      
+      return divrem;
+    }
+    
+    uint64_t d2 = clmulk_pop_prev_odd(d);
+
+    if (d == d2) { printf("no\n"); }
+
+    d = d2;
+    
+    if (clmulk_pop(d) != 3) {printf("what?\n");}
+  }
+  
+  divrem.r = 0;
+  
+  return divrem;
+}
+
+#else
+
+clmulk_pair_t clmulk_find_3(uint64_t k)
+{
+  uint64_t      div    = 0x7;
+  clmulk_pair_t divrem = clmulk_divrem(k, div);
+  
+  if (divrem.r == 0) {
+    divrem.r = div;
+    return divrem;
+  }
+
+  divrem.r = 0;
+  
+  return divrem;
+}
+
+#endif
+  
 
 //************************************************
 // goofying around. these are tots inconsistent.
@@ -467,12 +584,15 @@ clmulk_emit_mul4(clmulk_frag_t* f, uint32_t rn, uint64_t k)
 }
 
 
+// short-cut constants with popcount smaller
+// than `clmulk_tail_max`.
+
 const uint32_t clmulk_tail_max = 4;
 
 static inline uint32_t
 clmulk_tail(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
-  // caller has this. compiler should be removing
+  // caller has this. compiler should remove.
   uint32_t pop = clmulk_pop(k);
 
   switch(pop) {
@@ -495,12 +615,24 @@ static void foo(void)
 
 uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
+  clmulk_pair_t divrem;
+
   uint32_t pop = clmulk_pop(k);
   
   if (pop > clmulk_tail_max) {
     uint32_t s   = 0;
     
     if (pop & 1) {
+#if 0
+      divrem = clmulk_find_3(k);
+
+      if (divrem.r) {
+	rn = clmulk_g2br1_i(f, divrem.q, rn);
+	rn = clmulk_emit_mul3(f,rn,divrem.r);
+	return rn;
+      }
+#endif      
+      
       k  ^= 1;
       s   = clmulk_ctz(k);
       k >>= s;
@@ -509,7 +641,6 @@ uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
     // here: k is even so divisible by some 2-bit number
     // this is "naive" version. change to determine small
     // divisor and find any multiple
-    clmulk_pair_t divrem;
     uint32_t   pos = clmulk_log2_ceil(k);
     
     // make a find 2-bit function?
@@ -544,6 +675,78 @@ uint32_t clmulk_g2br1(clmulk_frag_t* f, uint64_t k)
 
   return rn;
 }
+
+
+//************************************************
+
+#define recurse clmulk_greedy_i
+
+uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
+{
+  clmulk_pair_t divrem;
+
+  uint32_t pop = clmulk_pop(k);
+  
+  if (pop > clmulk_tail_max) {
+    uint32_t s   = 0;
+    
+    if (pop & 1) {
+#if 1
+      divrem = clmulk_find_3(k);
+
+      if (divrem.r) {
+	rn = recurse(f, divrem.q, rn);
+	rn = clmulk_emit_mul3(f,rn,divrem.r);
+	return rn;
+      }
+#endif      
+      
+      k  ^= 1;
+      s   = clmulk_ctz(k);
+      k >>= s;
+    }
+    
+    // here: k is even so divisible by some 2-bit number
+    // this is "naive" version. change to determine small
+    // divisor and find any multiple
+    uint32_t   pos = clmulk_log2_ceil(k)-1;
+
+    // make a find 2-bit function?
+    // - return q & pos
+    // - but a try would go in the center...but that's
+    //   a different function.
+    do {
+      divrem = clmulk_divrem(k, (1ul<<pos)^1);
+      if (divrem.r == 0) break;
+      pos--;
+    } while(pos != 0);
+
+    rn = recurse(f, divrem.q, rn);
+    rn = clmulk_mul2(f, rn, pos);
+    
+    if (s != 0)
+      rn = clmulk_add1(f,rn,s);
+
+    return rn;
+  }
+
+  return clmulk_tail(f,k,rn);
+}
+
+#undef recurse
+
+
+// temp wrapper
+uint32_t clmulk_greedy(clmulk_frag_t* f, uint64_t k)
+{
+  uint32_t s  = clmulk_ctz(k);
+  uint32_t rn = clmulk_greedy_i(f,k>>s,0);
+  
+  f->op[rn] = CLMULK_SHIFT_RET(s);
+
+  return rn;
+}
+
 
 //************************************************
 

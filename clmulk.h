@@ -36,17 +36,32 @@ typedef struct { uint64_t q, r;} clmulk_pair_t;
 //   2) return r_n << s
 // * destintation register is implict. each is
 //   is only assigned to once.
+// * this is more general than I'm currently using.
+//   it would allow for additive factoring. As of now
+//   there's only:
+//   0) returns & explicit short cuts
+//   1) multiply by 2-bit number: (1+2^a)
+//      r[rn+1] = r[rn] ^ (r[rn  ] << a); rn++;
+//   2) multiply by 3-bit number: (1+2^a+2^b)
+//      r[rn+1] = r[rn] ^ (r[rn  ] << a); rn++;
+//      r[rn+1] = r[rn] ^ (r[rn-1] << b); rn++;
+//   3) multiply by 2-bit number & remainder of 1
+//      2^s(1+2^a)+1
+//      r[rn+1] = r[rn] ^ (r[rn  ] << a); rn++;
+//      r[rn+1] = r[ 0] ^ (r[rn  ] << s); rn++;
 
 typedef struct {
-  uint8_t op;
-  uint8_t a;
-  uint8_t b;
-  uint8_t s;
+  uint8_t op;    // only low bit used ATM
+  uint8_t a;     // register of add
+  uint8_t b;     // register of shifted
+  uint8_t s;     // [0,63]
 } clmulk_op_t;
 
-// enough space for schoolbook (even that can do
-// better than this if encode via (~k + ~0)
-// support is added for large popcount)
+// enough space for schoolbook. can do
+// better than this if (as an example)
+// encode via (~k + ~0) support is added for
+// large popcount vs sig digits...so low
+// transition counts.
 #define CLMULK_MAXOPS 65
 
 // quick wrapper
