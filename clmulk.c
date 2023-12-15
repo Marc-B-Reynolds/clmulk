@@ -10,8 +10,10 @@
 //#include <stdbool.h>
 #include <assert.h>
 
+#if 1
 #if defined(__GNUC__) && !defined(__clang__)
 static_assert(0, "problem under GCC atm. infinite loop. opps!");
+#endif
 #endif
 
 /************************************************
@@ -46,11 +48,82 @@ static_assert(0, "problem under GCC atm. infinite loop. opps!");
 //     testing.
 //   * root: keeping a small LRU could be useful for
 //     a compiler.
+//   * humm...but a searching version will hit the same
+//     terms frequently?? 
 // * cost modeling. currently there is none as I'm only
 //   producing one dep-chain. So it's almost the number
 //   of vm-ops produced (the exception being if the
 //   return op is shifted or not). This would need to
 //   change if I think of a useful additive factoring.
+
+//*************************************************************
+// method of attack thinking
+//
+// a possible method (not doing this yet)
+// 1. reduce to odd (low clear)
+// 2. while even parity
+//    * find largest 2-bit divisor. can be done by looking at
+//      irreduciables and if found determine the largest power
+//      of two of that which is a divisor.
+//    * quotient is alway odd
+// 3. while odd parity
+//    * see if any small 3-bit primitives are divisors. if not
+//      break to 4
+//    * find the largest power-of-two of found and factor
+//    * quotient is alway odd
+//    * SIGH! sometime much better and sometimes much worse
+//      with this step ATM. need to figure it out for greedy.
+// 4. punt and factor k into (k+1)+1. sometimes sucks.
+//    sometimes works really well. sigh.
+//    need to consider other "punt" methods
+
+//*************************************************************
+// big problems
+// * greed methods aren't currently limiting an can produce
+//   longer chain than schoolbook! Doh!
+
+
+
+/*
+ first 8 irreduciables of odd n-bits.
+  
+ 3-bit :
+....111   67109828  25.0004%
+...1.11   33558864  12.5017
+...11.1   33552933  12.4994
+..1..11   16777772   6.2502
+..11..1   16777312   6.2500
+.1..1.1    8389934   3.1255
+.1.1..1    8394884   3.1273
+1....11    4195571   1.5630
+         125147420  46.6210 (none)
+
+5-bit : 
+..11111 16785389  6.2530%
+.1.1111  8394103  3.1270
+.11.111  8389880  3.1255
+.111.11  8390993  3.1259
+.1111.1  8391199  3.1260
+1.1.111  4192705  1.5619
+1.11.11  4190816  1.5612
+11..111  4193318  1.5621
+                 78.7543 (none)
+
+7-bit (waste of time)
+..1.111111  2098432  0.7817%
+..111.1111  2099451  0.7821
+..1111.111  2097352  0.7813
+..111111.1  2098649  0.7818
+.1..111111  1049297  0.3909
+.1.1.11111  1048021  0.3904
+.1.111.111  1048324  0.3905
+.1.1111.11  1048535  0.3906
+                    95.4044 (none)		
+*/
+
+
+//*************************************************************
+
 
 #include "clmulk.h"
 
@@ -146,6 +219,9 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 {
   uint32_t len = clmulk_len(op);
 
+  // dumping line doesn't need a comment (needed?)
+  uint32_t skip = 0;
+  
   dump_line_64("//", k);
   printf("\nuint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n\n  r[ 0] = x;\n", k,len+1);
 
@@ -154,9 +230,44 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
     case 1:
       printf("  r[%2u] = r[%2u] ^ ", i+1, op[i].a);
       if (op[i].s != 0)
-	printf("(r[%2u] << %2u);\n", op[i].b, op[i].s);
+	printf("(r[%2u] << %2u);", op[i].b, op[i].s);
       else
-	printf("r[%2u];\n", op[i].b);
+	printf("r[%2u];", op[i].b);
+
+      // attempt to add comment (silly to deduce...but hacking yo!)
+      if (skip == 0) {
+	printf("  // ");
+
+	// is r[rn] ^ (rn[rn] << s)
+	if (op[i].a == op[i].b) {
+
+	  // is next op not a return
+	  if (op[i+1].op == 1) {
+	    
+	    if (op[i+1].a == 0) {
+	      uint64_t n = 1ul ^ (1ul << op[i].s);
+	      printf("0x%lx*rn+1", n << op[i+1].s);
+	      skip = 1;
+	    }
+	    else if (op[i+1].b == i) {
+	      uint64_t n = 1ul ^ (1ul << op[i].s) ^ (1ul << op[i+1].s);
+	      printf("0x%lx*rn (3-bit)",n);
+	      skip = 1;
+	    }
+	    else {
+	      uint64_t n = 1ul ^ (1ul << op[i].s);
+	      printf("0x%lx*rn (2-bit)",n);
+	    }
+	  }
+	  else {
+	    uint64_t n = 1ul ^ (1ul << op[i].s);
+	    printf("0x%lx*rn (2-bit)",n);
+	  }
+	}
+      }
+      else skip = 0;
+      
+      printf("\n");
       break;
 
     case 0:
@@ -307,6 +418,27 @@ uint64_t clmulk_vm_sanity(clmulk_vm_t* vm)
 
 
 //*************************************************************
+// dev hack
+uint32_t clmulk_trace = 0;
+
+// temp name
+static inline void trace_str(char* str)
+{
+  if (clmulk_trace) {
+    printf("%s\n", str);
+  }
+}
+
+static inline void trace_line(char* str, uint64_t n)
+{
+  if (clmulk_trace) {
+    dump_line_64(str,n);
+    printf("\n");
+  }
+}
+
+
+//*************************************************************
 
 static inline void clmulk_mul_assert(uint64_t k, uint32_t pop)
 {
@@ -325,6 +457,13 @@ static inline void clmulk_mul_assert(uint64_t k, uint32_t pop)
 
 
 //************************************************
+
+static inline uint32_t clmulk_limit(uint32_t limit, uint64_t k)
+{
+  uint32_t t = clmulk_pop(k)-1;
+  return limit <= t ? limit : t;
+}
+
 
 // build schoolbook: pop(k)-1 steps
 // TODO: add building ~k + ~0 for large pop
@@ -465,16 +604,41 @@ clmulk_pair_t clmulk_find_3(uint64_t k)
 
 #else
 
+// dumb version
 clmulk_pair_t clmulk_find_3(uint64_t k)
 {
+  //uint32_t pop = clmulk_pop(k);
+
+  // greedy popcount filtering hurts sometimes...sigh
+  
+  // powers of 7
   uint64_t      div    = 0x7;
   clmulk_pair_t divrem = clmulk_divrem(k, div);
-  
-  if (divrem.r == 0) {
-    divrem.r = div;
-    return divrem;
-  }
 
+  if (divrem.r == 0) {
+    clmulk_pair_t dr2 = clmulk_divrem(k,0x15);
+    
+    if (dr2.r == 0) {
+      clmulk_pair_t dr3 = clmulk_divrem(k,0x111);
+      
+      if (dr3.r == 0) {
+	dr3.r = 0x111;
+	
+	//if (clmulk_pop(dr3.q) < pop)
+	  return dr3;
+      }
+      
+      dr2.r = 0x15;
+      //if (clmulk_pop(dr2.q) < pop)
+	return dr2;
+    }
+    
+    divrem.r = 0x7;
+    
+    //if (clmulk_pop(dr2.q) < pop)
+      return divrem;
+  }
+  
   divrem.r = 0;
   
   return divrem;
@@ -623,21 +787,10 @@ uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
     uint32_t s   = 0;
     
     if (pop & 1) {
-#if 0
-      divrem = clmulk_find_3(k);
-
-      if (divrem.r) {
-	rn = clmulk_g2br1_i(f, divrem.q, rn);
-	rn = clmulk_emit_mul3(f,rn,divrem.r);
-	return rn;
-      }
-#endif      
-      
       k  ^= 1;
       s   = clmulk_ctz(k);
       k >>= s;
     }
-    
     // here: k is even so divisible by some 2-bit number
     // this is "naive" version. change to determine small
     // divisor and find any multiple
@@ -652,6 +805,19 @@ uint32_t clmulk_g2br1_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
       if (divrem.r == 0) break;
       pos--;
     } while(pos != 0);
+
+    if (s != 0) {
+      trace_str("+1 factor");
+      trace_line("  k ", k);
+    //trace_line("  k'", divrem.q);
+      trace_line("  f ", (1ul<<pos)^1);
+    }
+    else {
+      trace_str("2-bit factor");
+      trace_line("  k ", k);
+    //trace_line("  k'", divrem.q);
+      trace_line("  f ", (1ul<<pos)^1);
+    }
 
     rn = clmulk_g2br1_i(f, divrem.q, rn);
     rn = clmulk_mul2(f, rn, pos);
@@ -695,6 +861,10 @@ uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
       divrem = clmulk_find_3(k);
 
       if (divrem.r) {
+	trace_str("3-bit factor");
+	trace_line("  k ", k);
+      //trace_line("  k'", divrem.q);
+	trace_line("  f ", divrem.r);
 	rn = recurse(f, divrem.q, rn);
 	rn = clmulk_emit_mul3(f,rn,divrem.r);
 	return rn;
@@ -721,12 +891,25 @@ uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
       pos--;
     } while(pos != 0);
 
+    if (s != 0) {
+      trace_str("+1 factor");
+      trace_line("  k ", k);
+    //trace_line("  k'", divrem.q);
+      trace_line("  f ", (1ul<<pos)^1);
+    }
+    else {
+      trace_str("2-bit factor");
+      trace_line("  k ", k);
+    //trace_line("  k'", divrem.q);
+      trace_line("  f ", (1ul<<pos)^1);
+    }
+    
     rn = recurse(f, divrem.q, rn);
     rn = clmulk_mul2(f, rn, pos);
     
-    if (s != 0)
+    if (s != 0) {
       rn = clmulk_add1(f,rn,s);
-
+    }
     return rn;
   }
 
@@ -734,6 +917,7 @@ uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 }
 
 #undef recurse
+
 
 
 // temp wrapper

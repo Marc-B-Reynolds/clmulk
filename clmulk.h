@@ -24,6 +24,7 @@ static inline uint32_t clmulk_pop(uint64_t x) { return (uint32_t)_mm_popcnt_u64(
 
 static inline uint32_t clmulk_log2(uint64_t x)      { return (63-clmulk_clz(x  )); }
 static inline uint32_t clmulk_log2_ceil(uint64_t x) { return (64-clmulk_clz(x-1)); }
+static inline uint32_t clmulk_parity(uint64_t x)    { return clmulk_pop(x) & 1; }
 
 typedef struct { uint64_t q, r;} clmulk_pair_t; 
 
