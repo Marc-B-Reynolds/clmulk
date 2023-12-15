@@ -199,11 +199,16 @@ void lf(void) { printf("\n"); }
 
 void dump_line_64(char* prefix, uint64_t x)
 {
-  printf("%s 0x%016lx : ", prefix, x);
+  printf("%s 0x%016lx │ ", prefix, x);
   printb(x,64);
   printf(" %2u ", clmulk_pop(x));
 }
 
+//*************************************************************
+
+
+
+//*************************************************************
 
 // just for print_c: usually we know it...but don't care atm
 uint32_t clmulk_len(clmulk_op_t* op)
@@ -214,6 +219,7 @@ uint32_t clmulk_len(clmulk_op_t* op)
 
   return i;
 }
+
 
 void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 {
@@ -235,37 +241,49 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 	printf("r[%2u];", op[i].b);
 
       // attempt to add comment (silly to deduce...but hacking yo!)
+      // easy for this to be out-of-date and produce wrong comments.
+      // really for internal dev purposes. should be disabled by
+      // default.
+      // this is really poorly done..my bad
+
       if (skip == 0) {
 	printf("  // ");
 
+#if 0	
+	
+#else	
 	// is r[rn] ^ (rn[rn] << s)
 	if (op[i].a == op[i].b) {
+	  printf("r%u%s", i, i<10 ? " ":"");
 
 	  // is next op not a return
 	  if (op[i+1].op == 1) {
 	    
 	    if (op[i+1].a == 0) {
-	      uint64_t n = 1ul ^ (1ul << op[i].s);
-	      printf("0x%lx*rn+1", n << op[i+1].s);
+	      printf("*(2^%u + 2^%u) + r%u", op[i].s, op[i+1].s+op[i].s, 0);
 	      skip = 1;
 	    }
 	    else if (op[i+1].b == i) {
-	      uint64_t n = 1ul ^ (1ul << op[i].s) ^ (1ul << op[i+1].s);
-	      printf("0x%lx*rn (3-bit)",n);
-	      skip = 1;
+	      if ((op[i+2].op == 1) && (op[i+2].b == i)) {
+		printf("*(1 + 2^%u + 2^%u + 2^%u)", op[i].s, op[i+1].s, op[i+2].s);
+		skip = 2;
+	      }
+	      else {
+		printf("*(1 + 2^%u + 2^%u)", op[i].s, op[i+1].s);
+		skip = 1;
+	      }
 	    }
 	    else {
-	      uint64_t n = 1ul ^ (1ul << op[i].s);
-	      printf("0x%lx*rn (2-bit)",n);
+	      printf("*(1 + 2^%u)", op[i].s);
 	    }
 	  }
 	  else {
-	    uint64_t n = 1ul ^ (1ul << op[i].s);
-	    printf("0x%lx*rn (2-bit)",n);
+	    printf("*(1 + 2^%u)", op[i].s);
 	  }
 	}
+#endif	
       }
-      else skip = 0;
+      else skip--;
       
       printf("\n");
       break;
@@ -338,17 +356,17 @@ void clmulk_vm_print_c(clmulk_vm_t* vm)
 
 uint64_t clmulk_eval(clmulk_op_t* op, uint64_t x)
 {
-  uint64_t reg[CLMULK_MAXOPS];
+  uint64_t r[CLMULK_MAXOPS];
 
-  reg[0] = x;
+  r[0] = x;
 
   for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
     switch(op[i].op) {
       case 1:
-	reg[i+1] = reg[op[i].a] ^ (reg[op[i].b] << op[i].s);
+	r[i+1] = r[op[i].a] ^ (r[op[i].b] << op[i].s);
 	continue;
       case 0:
-	return reg[i] << op[i].s;
+	return r[i] << op[i].s;
       default:
 	goto error; 
     }
@@ -759,6 +777,9 @@ clmulk_tail(clmulk_frag_t* f, uint64_t k, uint32_t rn)
   // caller has this. compiler should remove.
   uint32_t pop = clmulk_pop(k);
 
+  trace_str("tail");
+  trace_line("  k ", k);
+  
   switch(pop) {
     case 4: rn = clmulk_emit_mul4(f, rn, k); break;
     case 3: rn = clmulk_emit_mul3(f, rn, k); break;
@@ -845,6 +866,11 @@ uint32_t clmulk_g2br1(clmulk_frag_t* f, uint64_t k)
 
 //************************************************
 
+// k(1+2^a) + 2^b : validate
+// r[rn+1] = r[n] ^ (r[n] << a); rn++;
+// r[rn+1] = r[n] ^ (r[0] << b); rn++;
+
+
 #define recurse clmulk_greedy_i
 
 uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
@@ -867,6 +893,31 @@ uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 	trace_line("  f ", divrem.r);
 	rn = recurse(f, divrem.q, rn);
 	rn = clmulk_emit_mul3(f,rn,divrem.r);
+	return rn;
+      }
+#endif
+
+#if 0
+      // just a testing hack
+      {
+	uint32_t a = 1;
+	uint32_t b = 1;
+
+	k ^= (1ul<<b);
+
+#if 0	
+	divrem = clmulk_divrem(k, 3);
+
+	if (divrem.r != 0) {
+	  printf("what?\n");
+	  exit(-1);
+	}
+#endif	
+
+	rn = recurse(f, k, rn);
+
+      //f->op[rn+1] = CLMULK_MUL(rn,rn,a); rn++;
+	f->op[rn+1] = CLMULK_MUL(rn, 0,b); rn++;
 	return rn;
       }
 #endif      

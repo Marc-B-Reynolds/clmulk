@@ -46,10 +46,12 @@ typedef struct { uint64_t q, r;} clmulk_pair_t;
 //   2) multiply by 3-bit number: (1+2^a+2^b)
 //      r[rn+1] = r[rn] ^ (r[rn  ] << a); rn++;
 //      r[rn+1] = r[rn] ^ (r[rn-1] << b); rn++;
-//   3) multiply by 2-bit number & remainder of 1
+//   3) multiply by 2-bit number and add 1
 //      2^s(1+2^a)+1
 //      r[rn+1] = r[rn] ^ (r[rn  ] << a); rn++;
 //      r[rn+1] = r[ 0] ^ (r[rn  ] << s); rn++;
+//   4) multiply by 2-bit number and add 2^s
+//      
 
 typedef struct {
   uint8_t op;    // only low bit used ATM
@@ -113,6 +115,8 @@ typedef struct {
 } clmulk_builder_t;
 
 extern void clmulk_print_c(uint64_t k, clmulk_op_t* op);
+
+extern uint64_t clmulk_eval(clmulk_op_t* op, uint64_t x);
 
 extern uint32_t clmulk_g2br1(clmulk_frag_t* f, uint64_t k);
 
