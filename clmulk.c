@@ -186,6 +186,23 @@ clmulk_pair_t clmulk_divrem(uint64_t a, uint64_t b)
   return (clmulk_pair_t){.q=q, .r=a};
 }
 
+
+// special case version: both odd. neither zero
+uint64_t clmulk_gcd(uint64_t u, uint64_t v)
+{
+  do {
+    // first pass ctz is zero. reorder?
+    v >>= clmulk_ctz(v);
+    if (u > v) { uint64_t t=u; u=v; v=t; }
+    v = v ^ u;
+  } while (v != 0);
+  
+  return u;
+}
+
+
+
+
 //*************************************************************
 
 // dumb but don't care
@@ -206,6 +223,18 @@ void dump_line_64(char* prefix, uint64_t x)
 
 //*************************************************************
 
+static inline uint32_t op_is_mul(clmulk_op_t op) { return ((op.op & 1)); }
+static inline uint32_t op_is_ret(clmulk_op_t op) { return ((op.op & 1) == 0); }
+
+#if 0
+static inline uint32_t op_shift(clmulk_op_t op)  { return (op.s & 0x3f); }
+static inline uint32_t op_a(clmulk_op_t op)      { return (op.a & 0x3f); }
+static inline uint32_t op_b(clmulk_op_t op)      { return (op.b & 0x3f); }
+#else
+static inline uint32_t op_shift(clmulk_op_t op)  { return op.s; }
+static inline uint32_t op_a(clmulk_op_t op)      { return op.a; }
+static inline uint32_t op_b(clmulk_op_t op)      { return op.b; }
+#endif
 
 
 //*************************************************************
@@ -215,7 +244,7 @@ uint32_t clmulk_len(clmulk_op_t* op)
 {
   uint32_t i = 0;
 
-  while(op[i].op != 0) i++;
+  while(op_is_mul(op[i])) i++;
 
   return i;
 }
@@ -225,126 +254,98 @@ void clmulk_print_c(uint64_t k, clmulk_op_t* op)
 {
   uint32_t len = clmulk_len(op);
 
-  // dumping line doesn't need a comment (needed?)
+  // dumping line doesn't need a comment (hack)
   uint32_t skip = 0;
   
   dump_line_64("//", k);
   printf("\nuint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n\n  r[ 0] = x;\n", k,len+1);
 
-  for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
-    switch(op[i].op) {
-    case 1:
-      printf("  r[%2u] = r[%2u] ^ ", i+1, op[i].a);
-      if (op[i].s != 0)
-	printf("(r[%2u] << %2u);", op[i].b, op[i].s);
-      else
-	printf("r[%2u];", op[i].b);
+  // I already know how long it is and don't need to check if it's
+  // a return inside. clean all of that up.
+  for(uint32_t i=0; i<len; i++) {
+    uint32_t a = op_a(op[i]);
+    uint32_t b = op_b(op[i]);
+    uint32_t s = op_shift(op[i]);
+    
+    printf("  r[%2u] = r[%2u] ^ ", i+1, a);
+    
+    if (s != 0)
+      printf("(r[%2u] << %2u);", b, s);
+    else
+      printf(" r[%2u];        ", b);
+    
+    // attempt to add comment (silly to deduce...but hacking yo!)
+    // easy for this to be out-of-date and produce wrong comments.
+    // really for internal dev purposes. should be disabled by
+    // default.
+    // this is really poorly done..my bad
+    
+    if (skip == 0) {
+      printf("  // ");
+      
+#if 1
+      if (a == b) {
+	printf("r%u%s*(", i, i<10 ? " ":"");
 
-      // attempt to add comment (silly to deduce...but hacking yo!)
-      // easy for this to be out-of-date and produce wrong comments.
-      // really for internal dev purposes. should be disabled by
-      // default.
-      // this is really poorly done..my bad
-
-      if (skip == 0) {
-	printf("  // ");
-
-#if 0	
-	
+	if ((len > i+4)) {
+	  printf("  4");
+	}
+	else if ((len > i+3)) {
+	  printf("  3");
+	}
+	else if ((len > i+2)) {
+	  printf("  2");
+	}
+	else if ((len > i+1)) {
+	  printf("  1");
+	}
+	else {
+	  printf("1 + 2^%u)", s);
+	}
+      }
 #else	
-	// is r[rn] ^ (rn[rn] << s)
-	if (op[i].a == op[i].b) {
-	  printf("r%u%s", i, i<10 ? " ":"");
-
-	  // is next op not a return
-	  if (op[i+1].op == 1) {
-	    
-	    if (op[i+1].a == 0) {
-	      printf("*(2^%u + 2^%u) + r%u", op[i].s, op[i+1].s+op[i].s, 0);
-	      skip = 1;
-	    }
-	    else if (op[i+1].b == i) {
-	      if ((op[i+2].op == 1) && (op[i+2].b == i)) {
-		printf("*(1 + 2^%u + 2^%u + 2^%u)", op[i].s, op[i+1].s, op[i+2].s);
-		skip = 2;
-	      }
-	      else {
-		printf("*(1 + 2^%u + 2^%u)", op[i].s, op[i+1].s);
-		skip = 1;
-	      }
+      // is r[rn] ^ (rn[rn] << s)
+      if (a == b) {
+	printf("r%u%s", i, i<10 ? " ":"");
+	
+	// is next op not a return
+	if (op[i+1].op == 1) {
+	  
+	  if (op[i+1].a == 0) {
+	    printf("*(2^%u + 2^%u) + r%u", s, op[i+1].s+s, 0);
+	    skip = 1;
+	  }
+	  else if (op[i+1].b == i) {
+	    if ((op[i+2].op == 1) && (op[i+2].b == i)) {
+	      printf("*(1 + 2^%u + 2^%u + 2^%u)", s, op[i+1].s, op[i+2].s);
+	      skip = 2;
 	    }
 	    else {
-	      printf("*(1 + 2^%u)", op[i].s);
+	      printf("*(1 + 2^%u + 2^%u)", s, op[i+1].s);
+	      skip = 1;
 	    }
 	  }
 	  else {
-	    printf("*(1 + 2^%u)", op[i].s);
+	    printf("*(1 + 2^%u)", s);
 	  }
 	}
-#endif	
+	else {
+	  printf("*(1 + 2^%u)", s);
+	}
       }
-      else skip--;
-      
-      printf("\n");
-      break;
-
-    case 0:
-      if (op[i].s == 0)
-	printf("\n  return r[%u];\n}\n", i);
-      else
-	printf("\n  return r[%u] << %u;\n}\n", i, op[i].s);
-      return;
- 
-    default:
-      printf("error: add stuff here\n"); return;
-      // error to reach here
+#endif	
     }
+    else skip--;
+    
+    printf("\n");
   }
-
-  // error to reach here
+  
+  if (op_shift(op[len]) == 0)
+    printf("\n  return r[%u];\n}\n", len);
+  else
+    printf("\n  return r[%u] << %u;\n}\n", len, op_shift(op[len]));
 }
 
-// doesn't general work ATM. for internal hacking
-#if 1
-void clmulk_print_rn_c(uint64_t k, clmulk_op_t* op)
-{
-  uint32_t len = clmulk_len(op);
-
-  printf("uint64_t cl_mulk_%lx(uint64_t x)\n{\n  uint64_t r[%u];\n  uint32_t rn = 0;\n\n  r[ 0] = x;\n", k,len+1);
-
-  for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
-    switch(op[i].op) {
-
-    case 1:
-
-      if ((op[i].a != 0) && (i != 0)) 
-	printf("  r[rn+1] = r[rn] ^ ");
-      else
-	printf("  r[rn+1] = r[ 0] ^ ");
-
-      if (op[i].s != 0)
-	printf("(r[rn] << %2u); rn++;\n", op[i].s);
-      else
-	printf("r[rn]; rn++;\n");
-
-      break;
-
-    case 0:
-      if (op[i].s == 0)
-	printf("\n  return r[rn];\n}\n");
-      else
-	printf("\n  return r[rn] << %u;\n}\n", op[i].s);
-      return;
- 
-    default:
-      printf("error: add stuff here\n"); return;
-      // error to reach here
-    }
-  }
-
-  // error to reach here
-}
-#endif
 
 void clmulk_vm_print_c(clmulk_vm_t* vm)
 {
@@ -354,26 +355,22 @@ void clmulk_vm_print_c(clmulk_vm_t* vm)
 
 //*************************************************************
 
-uint64_t clmulk_eval(clmulk_op_t* op, uint64_t x)
+uint64_t clmulk_eval(clmulk_op_t* p, uint64_t x)
 {
   uint64_t r[CLMULK_MAXOPS];
 
   r[0] = x;
 
   for(uint32_t i=0; i<CLMULK_MAXOPS; i++) {
-    switch(op[i].op) {
-      case 1:
-	r[i+1] = r[op[i].a] ^ (r[op[i].b] << op[i].s);
-	continue;
-      case 0:
-	return r[i] << op[i].s;
-      default:
-	goto error; 
-    }
+    clmulk_op_t op = p[i];
+    
+    if (op_is_mul(op))
+      r[i+1] = r[op_a(op)] ^ (r[op_b(op)] << op_shift(op));
+    else
+      return r[i] << op_shift(op);
   }
 
- error:
-  printf("error: add stuff here\n");
+  // error to reach here
   return 0;
 }
 
@@ -520,13 +517,15 @@ void clmulk_vm_schoolbook(clmulk_vm_t* vm, uint64_t k)
   vm->op[i] = CLMULK_SHIFT_RET(s);
 }
 
-
-
+//************************************************
+// brute force find largest 2-bit divisor of 'k'
 
 clmulk_pair_t clmulk_find_2(uint64_t k)
 {
   clmulk_pair_t divrem;
-  
+
+  // nope. too big for unbounded. and divrem
+  // won't discover 'large' divisors
   uint32_t bit = clmulk_log2_ceil(k);
 
   while(bit != 0) {
@@ -543,6 +542,52 @@ clmulk_pair_t clmulk_find_2(uint64_t k)
 
   return clmulk_divrem(k,3);
 }
+
+//************************************************
+
+// find largest power-of-two exponent of 3 that
+// is a divisor of 'x'. so {3,3^2,3^4,3^8,3^16,3^32}
+// input 'x' is limited to even parity. 
+static uint32_t factor_3_ep(uint64_t x, uint64_t r[static 6])
+{
+  // divisablity via product with multiplicative inverse method
+  // given the returned value 'n' then:
+  // * divisor = (1<<(1<<n))^1 : factor_3_ep_divisor
+  // * r[5-n]  = x / 3^(2^n)   : factor_3_ep_quotient
+
+  r[0] = x    ^ (x    << 32);
+  r[1] = r[0] ^ (r[0] << 16);
+  r[2] = r[1] ^ (r[1] <<  8);
+  r[3] = r[2] ^ (r[2] <<  4);
+  r[4] = r[3] ^ (r[3] <<  2);
+  r[5] = r[4] ^ (r[4] <<  1);
+
+  // use the divisablity condition to create a count.
+  // keep it simple to avoid branches and dependent
+  // loads.
+  uint32_t t,n;
+
+  t  = (r[4] < r[5]); n  = t;
+  t &= (r[3] < r[4]); n += t;
+  t &= (r[2] < r[3]); n += t;
+  t &= (r[1] < r[2]); n += t;
+  t &= (r[0] < r[1]); n += t;
+  
+  return n;
+}
+
+static inline uint64_t factor_3_ep_divisor(uint32_t n)
+{
+  return (UINT64_C(1) << (UINT64_C(1) << n)) ^ 1;
+}
+
+static inline uint64_t factor_3_ep_quotient(uint32_t n, uint64_t r[static 6])
+{
+  return r[5-n];
+}
+
+
+//************************************************
 
 // expensive. for experimenting
 #if 0
@@ -870,8 +915,19 @@ uint32_t clmulk_g2br1(clmulk_frag_t* f, uint64_t k)
 // r[rn+1] = r[n] ^ (r[n] << a); rn++;
 // r[rn+1] = r[n] ^ (r[0] << b); rn++;
 
+static inline uint64_t make_2bit(uint32_t p)
+{
+  return (UINT64_C(1)<<p)^1;
+}
+
 
 #define recurse clmulk_greedy_i
+
+#if 0
+#define SPEW(X) X
+#else
+#define SPEW(X) 
+#endif
 
 uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 {
@@ -889,13 +945,61 @@ uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
       if (divrem.r) {
 	trace_str("3-bit factor");
 	trace_line("  k ", k);
-      //trace_line("  k'", divrem.q);
 	trace_line("  f ", divrem.r);
+	
 	rn = recurse(f, divrem.q, rn);
 	rn = clmulk_emit_mul3(f,rn,divrem.r);
 	return rn;
       }
 #endif
+
+#if 1
+      {
+	uint32_t s = clmulk_log2(k) >> 1;
+	uint64_t d = make_2bit(s);
+	clmulk_pair_t best;
+	uint32_t min   = pop;
+	uint32_t score = pop;
+	uint32_t s_best = 0;
+
+	trace_line("    k", k);
+
+	do {
+	  d      = make_2bit(s);
+	  divrem = clmulk_divrem(k,d);
+	  score  = clmulk_pop(divrem.q);
+	  
+	  if (clmulk_pop(divrem.r) == 1) {
+	    if (score < min) {
+	      best   = divrem;
+	      min    = score;
+	      s_best = s;
+
+	      trace_line("    d", d);
+	      trace_line("    q", divrem.q);
+	      trace_line("    r", divrem.r);
+	    }
+	  }
+	  s--;
+	} while(s > 1);
+
+	if (min != pop) {
+	  // check for 3-bit divisors here? think, think
+	  uint32_t a = s_best;
+	  uint32_t b = clmulk_ctz(best.r);
+	  //printf("a=%u, b=%u\n", a,b);
+#if 1
+	  if (b != 0) {
+	    rn = recurse(f, best.q, rn);
+	    f->op[rn] = CLMULK_MUL(rn,rn,a); rn++;
+	    f->op[rn] = CLMULK_MUL(rn, 0,b); rn++;
+	    return rn;
+	  }
+#endif	  
+	}
+      }
+#endif      
+
 
 #if 0
       // just a testing hack
@@ -916,7 +1020,7 @@ uint32_t clmulk_greedy_i(clmulk_frag_t* f, uint64_t k, uint32_t rn)
 
 	rn = recurse(f, k, rn);
 
-      //f->op[rn+1] = CLMULK_MUL(rn,rn,a); rn++;
+	f->op[rn+1] = CLMULK_MUL(rn,rn,a); rn++;
 	f->op[rn+1] = CLMULK_MUL(rn, 0,b); rn++;
 	return rn;
       }

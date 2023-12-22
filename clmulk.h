@@ -41,6 +41,10 @@ typedef struct { uint64_t q, r;} clmulk_pair_t;
 //   it would allow for additive factoring. As of now
 //   there's only:
 //   0) returns & explicit short cuts
+//      * 
+//      * 
+//      * 
+//      * pop(k) >= 4 
 //   1) multiply by 2-bit number: (1+2^a)
 //      r[rn+1] = r[rn] ^ (r[rn  ] << a); rn++;
 //   2) multiply by 3-bit number: (1+2^a+2^b)
@@ -53,6 +57,7 @@ typedef struct { uint64_t q, r;} clmulk_pair_t;
 //   4) multiply by 2-bit number and add 2^s
 //      
 
+// warning this could be passed around
 typedef struct {
   uint8_t op;    // only low bit used ATM
   uint8_t a;     // register of add
